@@ -43,13 +43,13 @@ jobs:
         run: |
           cd sdk
           echo "src-git amneziawg https://github.com/amnezia-vpn/amneziawg-openwrt.git" >> feeds.conf.default
-          ./scripts/feeds update amneziawg
+          ./scripts/feeds update amneziawg luci
+          ./scripts/feeds install luci-base
           ./scripts/feeds install -a -p amneziawg
 
           # Patch Makefile to use our prepared Linux 6.12 wireguard source
           sed -i 's|\$(LINUX_DIR)/drivers/net/wireguard/|/tmp/wireguard-src/|g' feeds/amneziawg/kmod-amneziawg/Makefile
           sed -i 's|\$(LINUX_DIR)/include/uapi/linux/wireguard.h|/tmp/wireguard-uapi/wireguard.h|g' feeds/amneziawg/kmod-amneziawg/Makefile
-          cat feeds/amneziawg/kmod-amneziawg/Makefile | grep -A 10 "Build/Prepare"
 
           make defconfig
           echo "CONFIG_PACKAGE_kmod-amneziawg=m" >> .config
