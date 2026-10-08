@@ -1,0 +1,66 @@
+name: Build AmneziaWG for ImmortalWrt 25.12.2 (Kernel 6.12.103)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison gawk gettext git \
+            libncurses-dev libssl-dev rsync unzip zlib1g-dev zstd file wget libelf-dev
+
+      - name: Download official ImmortalWrt 25.12.2 Filogic SDK
+        run: |
+          SDK_URL="https://downloads.immortalwrt.org/releases/25.12.2/targets/mediatek/filogic/immortalwrt-sdk-25.12.2-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
+          echo "Downloading SDK..."
+          wget -q -O sdk.tar.zst "$SDK_URL"
+          mkdir sdk
+          tar --zstd -xf sdk.tar.zst -C sdk --strip-components=1
+          rm sdk.tar.zst
+
+      - name: Clone AmneziaWG source and prepare config
+        run: |
+          cd sdk
+          git clone https://github.com/amnezia-vpn/amneziawg-openwrt.git package/amneziawg
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          make defconfig
+          echo "CONFIG_PACKAGE_kmod-amneziawg=m" >> .config
+          echo "CONFIG_PACKAGE_amneziawg-tools=y" >> .config
+          echo "CONFIG_PACKAGE_luci-proto-amneziawg=y" >> .config
+          make defconfig
+
+      - name: Compile AmneziaWG packages
+        run: |
+          cd sdk
+          make package/amneziawg/compile -j$(nproc) V=s
+
+      - name: List built packages
+        run: |
+          find sdk/bin/ -type f -name "*amneziawg*.apk"
+
+      - name: Upload APK packages artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: amneziawg-6.12.103-apk
+          path: sdk/bin/**/*amneziawg*.apk
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v25.12.2-k6.12.103
+          name: AmneziaWG APK for ImmortalWrt 25.12.2 (Kernel 6.12.103)
+          files: sdk/bin/**/*amneziawg*.apk
+          body: |
+            AmneziaWG APK packages for ImmortalWrt 25.12.2 (mediatek/filogic, aarch64_cortex-a53).
+            Kernel: 6.12.103~b5b7729ffbba3ecdd83f339de8fadfb8
