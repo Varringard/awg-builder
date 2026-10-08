@@ -28,12 +28,29 @@ jobs:
           tar --zstd -xf sdk.tar.zst -C sdk --strip-components=1
           rm sdk.tar.zst
 
+      - name: Prepare Linux 6.12 WireGuard source
+        run: |
+          echo "Cloning WireGuard source from Linux 6.12..."
+          git clone --depth 1 --filter=blob:none --sparse --branch v6.12 https://github.com/torvalds/linux.git /tmp/linux-wg
+          cd /tmp/linux-wg
+          git sparse-checkout set drivers/net/wireguard include/uapi/linux/wireguard.h
+          mkdir -p /tmp/wireguard-src /tmp/wireguard-uapi
+          cp -r /tmp/linux-wg/drivers/net/wireguard/* /tmp/wireguard-src/
+          cp /tmp/linux-wg/include/uapi/linux/wireguard.h /tmp/wireguard-uapi/
+          ls -la /tmp/wireguard-src/
+
       - name: Add AmneziaWG feed and prepare config
         run: |
           cd sdk
           echo "src-git amneziawg https://github.com/amnezia-vpn/amneziawg-openwrt.git" >> feeds.conf.default
           ./scripts/feeds update amneziawg
           ./scripts/feeds install -a -p amneziawg
+
+          # Patch Makefile to use our prepared Linux 6.12 wireguard source
+          sed -i 's|\$(LINUX_DIR)/drivers/net/wireguard/|/tmp/wireguard-src/|g' feeds/amneziawg/kmod-amneziawg/Makefile
+          sed -i 's|\$(LINUX_DIR)/include/uapi/linux/wireguard.h|/tmp/wireguard-uapi/wireguard.h|g' feeds/amneziawg/kmod-amneziawg/Makefile
+          cat feeds/amneziawg/kmod-amneziawg/Makefile | grep -A 10 "Build/Prepare"
+
           make defconfig
           echo "CONFIG_PACKAGE_kmod-amneziawg=m" >> .config
           echo "CONFIG_PACKAGE_amneziawg-tools=y" >> .config
