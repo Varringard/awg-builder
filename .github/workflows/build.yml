@@ -33,10 +33,10 @@ jobs:
           echo "Cloning WireGuard source from Linux 6.12..."
           git clone --depth 1 --filter=blob:none --sparse --branch v6.12 https://github.com/torvalds/linux.git /tmp/linux-wg
           cd /tmp/linux-wg
-          git sparse-checkout set drivers/net/wireguard include/uapi/linux/wireguard.h
+          git sparse-checkout set drivers/net/wireguard include/uapi/linux
           mkdir -p /tmp/wireguard-src /tmp/wireguard-uapi
-          cp -r /tmp/linux-wg/drivers/net/wireguard/* /tmp/wireguard-src/
-          cp /tmp/linux-wg/include/uapi/linux/wireguard.h /tmp/wireguard-uapi/
+          cp -r drivers/net/wireguard/* /tmp/wireguard-src/
+          cp include/uapi/linux/wireguard.h /tmp/wireguard-uapi/
           ls -la /tmp/wireguard-src/
 
       - name: Add AmneziaWG feed and prepare config
