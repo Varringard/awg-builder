@@ -50,6 +50,13 @@ jobs:
           LINUX_DIR=$(find build_dir/ -maxdepth 3 -name "linux-6.6*" | head -n 1)
           if [ -n "$LINUX_DIR" ]; then
             echo "Found Linux dir: $LINUX_DIR"
+            TARGET_DIR="${LINUX_DIR%/*}/linux-6.6.95"
+            if [ "$LINUX_DIR" != "$TARGET_DIR" ]; then
+              echo "Copying $LINUX_DIR to $TARGET_DIR..."
+              cp -al "$LINUX_DIR" "$TARGET_DIR"
+            fi
+            LINUX_DIR="$TARGET_DIR"
+
             if [ -f "$LINUX_DIR/Makefile" ]; then
               sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 95/' "$LINUX_DIR/Makefile"
             fi
@@ -63,6 +70,13 @@ jobs:
           fi
 
           find staging_dir/ -name ".vermagic" -exec sh -c 'echo "e4a482954d3a4492189ab1b470ab3d29" > "$1"' _ {} \; || true
+
+          for d in $(find staging_dir/ -name "*linux-6.6.93*"); do
+            newd=$(echo "$d" | sed 's/6\.6\.93/6.6.95/g')
+            if [ -d "$d" ] && [ ! -e "$newd" ]; then
+              ln -sf "$d" "$newd"
+            fi
+          done
 
       - name: Add AmneziaWG feed and prepare config
         run: |
@@ -110,10 +124,10 @@ jobs:
             echo "Updated control:"
             grep -E "Package:|Version:|Depends:" "$WORKDIR/control_dir/control" || true
 
-            (cd "$WORKDIR/control_dir" && tar --format=gnu --sort=name -czf "$WORKDIR/control.tar.gz" .)
+            (cd "$WORKDIR/control_dir" && tar --format=gnu --numeric-owner --sort=name -cf - . | gzip -n - > "$WORKDIR/control.tar.gz")
             rm -rf "$WORKDIR/control_dir"
 
-            (cd "$WORKDIR" && tar --format=gnu -czf "$ipk" ./debian-binary ./control.tar.gz ./data.tar.gz)
+            (cd "$WORKDIR" && tar --format=gnu --numeric-owner --sort=name -cf - ./debian-binary ./data.tar.gz ./control.tar.gz | gzip -n - > "$ipk")
             rm -rf "$WORKDIR"
             echo "Successfully repacked $ipk"
           done
