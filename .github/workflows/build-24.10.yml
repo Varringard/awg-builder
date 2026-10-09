@@ -103,33 +103,17 @@ jobs:
           make package/amneziawg-tools/compile V=s -j$(nproc)
           make package/luci-proto-amneziawg/compile V=s -j$(nproc) || true
 
-      - name: List and fix IPK packages
+      - name: Inspect built IPK packages
         run: |
-          TARGET_KERNEL="6.6.95~e4a482954d3a4492189ab1b470ab3d29-r1"
-          echo "Target kernel dependency: kernel (= $TARGET_KERNEL)"
           find sdk/bin/ -type f -name "*.ipk"
-
           for ipk in $(find sdk/bin/ -type f -name "kmod-amneziawg*.ipk"); do
-            echo "Processing $ipk..."
+            echo "Inspecting $ipk..."
             WORKDIR=$(mktemp -d)
             tar -xzf "$ipk" -C "$WORKDIR"
-            mkdir -p "$WORKDIR/control_dir"
-            tar -xzf "$WORKDIR/control.tar.gz" -C "$WORKDIR/control_dir"
-
-            echo "Original control of $(basename $ipk):"
-            grep -E "Package:|Version:|Depends:" "$WORKDIR/control_dir/control" || true
-
-            sed -i -E "s/kernel \(= [^)]+\)/kernel (= $TARGET_KERNEL)/g" "$WORKDIR/control_dir/control"
-
-            echo "Updated control:"
-            grep -E "Package:|Version:|Depends:" "$WORKDIR/control_dir/control" || true
-
-            (cd "$WORKDIR/control_dir" && tar --format=gnu --numeric-owner --sort=name -cf - . | gzip -n - > "$WORKDIR/control.tar.gz")
-            rm -rf "$WORKDIR/control_dir"
-
-            (cd "$WORKDIR" && tar --format=gnu --numeric-owner --sort=name -cf - ./debian-binary ./data.tar.gz ./control.tar.gz | gzip -n - > "$ipk")
+            tar -xzf "$WORKDIR/control.tar.gz" -C "$WORKDIR"
+            echo "Package control file:"
+            cat "$WORKDIR/control"
             rm -rf "$WORKDIR"
-            echo "Successfully repacked $ipk"
           done
 
       - name: Check kernel module vermagic
