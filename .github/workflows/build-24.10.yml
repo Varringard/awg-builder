@@ -1,0 +1,171 @@
+name: Build AmneziaWG for ImmortalWrt 24.10 (Kernel 6.6.95)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-24.10.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison gawk gettext git \
+            libncurses-dev libssl-dev rsync unzip zlib1g-dev zstd file wget libelf-dev
+
+      - name: Download ImmortalWrt 24.10 Filogic SDK
+        run: |
+          SDK_URL="https://downloads.immortalwrt.org/releases/24.10.2/targets/mediatek/filogic/immortalwrt-sdk-24.10.2-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
+          echo "Downloading SDK from $SDK_URL..."
+          wget -q -O sdk.tar.zst "$SDK_URL"
+          mkdir sdk
+          tar --zstd -xf sdk.tar.zst -C sdk --strip-components=1
+          rm sdk.tar.zst
+
+      - name: Prepare Linux 6.6.95 WireGuard source
+        run: |
+          echo "Cloning WireGuard source from Linux 6.6.95..."
+          git clone --depth 1 --filter=blob:none --sparse --branch v6.6.95 https://github.com/gregkh/linux.git /tmp/linux-wg || \
+          git clone --depth 1 --filter=blob:none --sparse --branch v6.6 https://github.com/torvalds/linux.git /tmp/linux-wg
+          cd /tmp/linux-wg
+          git sparse-checkout set drivers/net/wireguard include/uapi/linux
+          mkdir -p /tmp/wireguard-src /tmp/wireguard-uapi
+          cp -r drivers/net/wireguard/* /tmp/wireguard-src/
+          cp include/uapi/linux/wireguard.h /tmp/wireguard-uapi/
+          ls -la /tmp/wireguard-src/
+
+      - name: Inspect and configure SDK kernel environment
+        run: |
+          cd sdk
+          echo "Inspecting SDK build directories..."
+          find build_dir/ -maxdepth 3 -name "linux-*" || true
+
+          LINUX_DIR=$(find build_dir/ -maxdepth 3 -name "linux-6.6*" | head -n 1)
+          if [ -n "$LINUX_DIR" ]; then
+            echo "Found Linux dir: $LINUX_DIR"
+            if [ -f "$LINUX_DIR/Makefile" ]; then
+              sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 95/' "$LINUX_DIR/Makefile"
+            fi
+            find "$LINUX_DIR" -name "utsrelease.h" -exec sed -i 's/"6\.6\.[0-9]\+"/"6.6.95"/g' {} +
+            find "$LINUX_DIR" -name "kernel.release" -exec sed -i 's/6\.6\.[0-9]\+/6.6.95/g' {} +
+            echo "e4a482954d3a4492189ab1b470ab3d29" > "$LINUX_DIR/.vermagic"
+          fi
+
+          if [ -f include/kernel-6.6 ]; then
+            sed -i 's/LINUX_VERSION-6.6 = .*/LINUX_VERSION-6.6 = .95/' include/kernel-6.6
+          fi
+
+          find staging_dir/ -name ".vermagic" -exec sh -c 'echo "e4a482954d3a4492189ab1b470ab3d29" > "$1"' _ {} \; || true
+
+      - name: Add AmneziaWG feed and prepare config
+        run: |
+          cd sdk
+          echo "src-git amneziawg https://github.com/amnezia-vpn/amneziawg-openwrt.git" >> feeds.conf.default
+          ./scripts/feeds update amneziawg luci
+          ./scripts/feeds install luci-base
+          ./scripts/feeds install -a -p amneziawg
+
+          # Patch Makefile to use our prepared Linux 6.6.95 wireguard source
+          sed -i 's|\$(LINUX_DIR)/drivers/net/wireguard/|/tmp/wireguard-src/|g' feeds/amneziawg/kmod-amneziawg/Makefile
+          sed -i 's|\$(LINUX_DIR)/include/uapi/linux/wireguard.h|/tmp/wireguard-uapi/wireguard.h|g' feeds/amneziawg/kmod-amneziawg/Makefile
+
+          make defconfig
+          echo "CONFIG_PACKAGE_kmod-amneziawg=m" >> .config
+          echo "CONFIG_PACKAGE_amneziawg-tools=y" >> .config
+          echo "CONFIG_PACKAGE_luci-proto-amneziawg=y" >> .config
+          make defconfig
+
+      - name: Compile packages
+        run: |
+          cd sdk
+          make package/kmod-amneziawg/compile V=s -j$(nproc)
+          make package/amneziawg-tools/compile V=s -j$(nproc)
+          make package/luci-proto-amneziawg/compile V=s -j$(nproc) || true
+
+      - name: List and fix IPK packages
+        run: |
+          TARGET_KERNEL="6.6.95~e4a482954d3a4492189ab1b470ab3d29-r1"
+          echo "Target kernel dependency: kernel (= $TARGET_KERNEL)"
+          find sdk/bin/ -type f -name "*.ipk"
+
+          for ipk in $(find sdk/bin/ -type f -name "kmod-amneziawg*.ipk"); do
+            echo "Processing $ipk..."
+            WORKDIR=$(mktemp -d)
+            tar -xzf "$ipk" -C "$WORKDIR"
+            mkdir -p "$WORKDIR/control_dir"
+            tar -xzf "$WORKDIR/control.tar.gz" -C "$WORKDIR/control_dir"
+
+            echo "Original control of $(basename $ipk):"
+            grep -E "Package:|Version:|Depends:" "$WORKDIR/control_dir/control" || true
+
+            sed -i -E "s/kernel \(= [^)]+\)/kernel (= $TARGET_KERNEL)/g" "$WORKDIR/control_dir/control"
+
+            echo "Updated control:"
+            grep -E "Package:|Version:|Depends:" "$WORKDIR/control_dir/control" || true
+
+            (cd "$WORKDIR/control_dir" && tar --format=gnu --sort=name -czf "$WORKDIR/control.tar.gz" .)
+            rm -rf "$WORKDIR/control_dir"
+
+            (cd "$WORKDIR" && tar --format=gnu -czf "$ipk" ./debian-binary ./control.tar.gz ./data.tar.gz)
+            rm -rf "$WORKDIR"
+            echo "Successfully repacked $ipk"
+          done
+
+      - name: Check kernel module vermagic
+        run: |
+          for ipk in $(find sdk/bin/ -type f -name "kmod-amneziawg*.ipk"); do
+            WORKDIR=$(mktemp -d)
+            tar -xzf "$ipk" -C "$WORKDIR"
+            tar -xzf "$WORKDIR/data.tar.gz" -C "$WORKDIR"
+            KO=$(find "$WORKDIR" -name "amneziawg.ko")
+            if [ -n "$KO" ]; then
+              echo "Inspecting $KO:"
+              strings "$KO" | grep "vermagic=" || true
+            fi
+            rm -rf "$WORKDIR"
+          done
+
+      - name: Prepare Release Artifacts
+        run: |
+          mkdir -p /tmp/release-pkgs
+          find sdk/bin/ -type f -name "*amneziawg*.ipk" -exec cp {} /tmp/release-pkgs/ \;
+          ls -la /tmp/release-pkgs/
+
+      - name: Upload IPK packages artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: amneziawg-24.10-k6.6.95-ipk
+          path: /tmp/release-pkgs/*.ipk
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v24.10-k6.6.95
+          name: AmneziaWG IPK for ImmortalWrt 24.10 (Cudy TR3000 / Kernel 6.6.95)
+          files: /tmp/release-pkgs/*.ipk
+          overwrite: true
+          body: |
+            AmneziaWG IPK packages for Cudy TR3000 (ImmortalWrt 24.10-SNAPSHOT, mediatek/filogic, aarch64_cortex-a53).
+            Kernel: 6.6.95~e4a482954d3a4492189ab1b470ab3d29-r1
+
+            Пакеты:
+            - `kmod-amneziawg`
+            - `amneziawg-tools` (`awg`, `awg-quick`)
+            - `luci-proto-amneziawg`
+
+            ### Установка на Cudy TR3000:
+            1. Загрузите файлы на роутер в `/tmp`:
+               ```bash
+               scp *.ipk root@192.168.1.1:/tmp/
+               ```
+            2. Подключитесь по SSH и установите:
+               ```bash
+               opkg install /tmp/kmod-amneziawg*.ipk /tmp/amneziawg-tools*.ipk /tmp/luci-proto-amneziawg*.ipk
+               ```
