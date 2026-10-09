@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - '.github/workflows/build-24.10.yml'
+      - 'cudy-kernel.config'
 
 permissions:
   contents: write
@@ -14,11 +15,14 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang flex bison gawk gettext git \
-            libncurses-dev libssl-dev rsync unzip zlib1g-dev zstd file wget libelf-dev
+            libncurses-dev libssl-dev rsync unzip zlib1g-dev zstd file wget libelf-dev bc
 
       - name: Download ImmortalWrt 24.10 Filogic SDK
         run: |
@@ -41,7 +45,7 @@ jobs:
           cp include/uapi/linux/wireguard.h /tmp/wireguard-uapi/
           ls -la /tmp/wireguard-src/
 
-      - name: Inspect and configure SDK kernel environment
+      - name: Inspect and configure SDK kernel environment with exact Cudy config
         run: |
           cd sdk
           echo "Inspecting SDK build directories..."
@@ -57,12 +61,28 @@ jobs:
             fi
             LINUX_DIR="$TARGET_DIR"
 
+            # Apply exact router running kernel config
+            if [ -f "$GITHUB_WORKSPACE/cudy-kernel.config" ]; then
+              echo "Applying exact Cudy running kernel config to $LINUX_DIR/.config..."
+              cp "$GITHUB_WORKSPACE/cudy-kernel.config" "$LINUX_DIR/.config"
+            fi
+
             if [ -f "$LINUX_DIR/Makefile" ]; then
               sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 95/' "$LINUX_DIR/Makefile"
             fi
             find "$LINUX_DIR" -name "utsrelease.h" -exec sed -i 's/"6\.6\.[0-9]\+"/"6.6.95"/g' {} +
             find "$LINUX_DIR" -name "kernel.release" -exec sed -i 's/6\.6\.[0-9]\+/6.6.95/g' {} +
             echo "e4a482954d3a4492189ab1b470ab3d29" > "$LINUX_DIR/.vermagic"
+
+            # Re-generate autoconf.h matching the router's config
+            TOOLCHAIN_BIN=$(find staging_dir/ -type d -name "toolchain-*_musl")/bin
+            if [ -d "$TOOLCHAIN_BIN" ]; then
+              export PATH="$TOOLCHAIN_BIN:$PATH"
+              CROSS="aarch64-openwrt-linux-musl-"
+              echo "Running olddefconfig and modules_prepare with $CROSS..."
+              make -C "$LINUX_DIR" ARCH=arm64 CROSS_COMPILE="$CROSS" olddefconfig
+              make -C "$LINUX_DIR" ARCH=arm64 CROSS_COMPILE="$CROSS" modules_prepare || true
+            fi
           fi
 
           if [ -f include/kernel-6.6 ]; then
@@ -114,7 +134,7 @@ jobs:
             rm -rf "$WORKDIR"
           done
 
-      - name: Check kernel module vermagic
+      - name: Check kernel module vermagic and struct module size
         run: |
           for ipk in $(find sdk/bin/ -type f -name "kmod-amneziawg*.ipk"); do
             WORKDIR=$(mktemp -d)
@@ -124,6 +144,7 @@ jobs:
             if [ -n "$KO" ]; then
               echo "Inspecting $KO:"
               strings "$KO" | grep "vermagic=" || true
+              readelf -S "$KO" | grep -E "this_module|\.text" || true
             fi
             rm -rf "$WORKDIR"
           done
@@ -179,7 +200,7 @@ jobs:
           overwrite: true
           body: |
             AmneziaWG IPK packages for Cudy TR3000 (ImmortalWrt 24.10-SNAPSHOT, mediatek/filogic, aarch64_cortex-a53).
-            Kernel: 6.6.95~e4a482954d3a4492189ab1b470ab3d29-r1
+            Kernel: 6.6.95~e4a482954d3a4492189ab1b470ab3d29-r1 (Built with exact router running kernel config).
 
             Пакеты:
             - `kmod-amneziawg_6.6.95.0.0.1-r1_aarch64_cortex-a53.ipk`
