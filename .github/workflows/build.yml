@@ -2,8 +2,6 @@ name: Build AmneziaWG for ImmortalWrt 25.12.2 (Kernel 6.12.103)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ "main" ]
 
 permissions:
   contents: write
