@@ -93,7 +93,6 @@ jobs:
           make defconfig
           echo "CONFIG_PACKAGE_kmod-amneziawg=m" >> .config
           echo "CONFIG_PACKAGE_amneziawg-tools=y" >> .config
-          echo "CONFIG_PACKAGE_luci-proto-amneziawg=y" >> .config
           make defconfig
 
       - name: Compile packages
@@ -101,7 +100,6 @@ jobs:
           cd sdk
           make package/kmod-amneziawg/compile V=s -j$(nproc)
           make package/amneziawg-tools/compile V=s -j$(nproc)
-          make package/luci-proto-amneziawg/compile V=s -j$(nproc) || true
 
       - name: Inspect built IPK packages
         run: |
@@ -134,6 +132,36 @@ jobs:
         run: |
           mkdir -p /tmp/release-pkgs
           find sdk/bin/ -type f -name "*amneziawg*.ipk" -exec cp {} /tmp/release-pkgs/ \;
+
+          # Package luci-proto-amneziawg directly
+          LUCI_DIR="sdk/feeds/amneziawg/luci-proto-amneziawg"
+          if [ -d "$LUCI_DIR" ]; then
+            echo "Packaging luci-proto-amneziawg..."
+            WORKDIR=$(mktemp -d)
+            mkdir -p "$WORKDIR/data/www" "$WORKDIR/data/usr" "$WORKDIR/control"
+            cp -r "$LUCI_DIR/htdocs/"* "$WORKDIR/data/www/" || true
+            cp -r "$LUCI_DIR/root/usr/"* "$WORKDIR/data/usr/" || true
+
+            cat << 'EOF' > "$WORKDIR/control/control"
+          Package: luci-proto-amneziawg
+          Version: 0.0.1-1
+          Depends: luci-base, amneziawg-tools, ucode
+          Architecture: all
+          Maintainer: Amnezia Admin <admin@amnezia.org>
+          Section: luci
+          Source: feeds/amneziawg/luci-proto-amneziawg
+          Description: Provides Web UI for AmneziaWG
+          EOF
+            sed -i 's/^[[:space:]]\+//' "$WORKDIR/control/control"
+
+            (cd "$WORKDIR/data" && tar --format=gnu --numeric-owner --sort=name -czf "$WORKDIR/data.tar.gz" .)
+            (cd "$WORKDIR/control" && tar --format=gnu --numeric-owner --sort=name -czf "$WORKDIR/control.tar.gz" .)
+            echo "2.0" > "$WORKDIR/debian-binary"
+
+            (cd "$WORKDIR" && tar --format=gnu -czf /tmp/release-pkgs/luci-proto-amneziawg_0.0.1-1_all.ipk ./debian-binary ./control.tar.gz ./data.tar.gz)
+            rm -rf "$WORKDIR"
+          fi
+
           ls -la /tmp/release-pkgs/
 
       - name: Upload IPK packages artifact
@@ -154,9 +182,9 @@ jobs:
             Kernel: 6.6.95~e4a482954d3a4492189ab1b470ab3d29-r1
 
             Пакеты:
-            - `kmod-amneziawg`
-            - `amneziawg-tools` (`awg`, `awg-quick`)
-            - `luci-proto-amneziawg`
+            - `kmod-amneziawg_6.6.95.0.0.1-r1_aarch64_cortex-a53.ipk`
+            - `amneziawg-tools_1.0.20240213-r1_aarch64_cortex-a53.ipk`
+            - `luci-proto-amneziawg_0.0.1-1_all.ipk`
 
             ### Установка на Cudy TR3000:
             1. Загрузите файлы на роутер в `/tmp`:
