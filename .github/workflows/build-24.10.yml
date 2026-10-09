@@ -3,15 +3,16 @@ name: Build AmneziaWG for ImmortalWrt 24.10 (Kernel 6.6.95)
 on:
   workflow_dispatch:
   push:
-    paths:
-      - '.github/workflows/build-24.10.yml'
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    name: Build AmneziaWG IPK (Filogic 24.10 / Kernel 6.6.95)
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -20,27 +21,23 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang flex bison gawk gettext git \
-            libncurses-dev libssl-dev rsync unzip zlib1g-dev zstd file wget libelf-dev bc
+          sudo apt-get install -y build-essential libncurses5-dev libncursesw5-dev \
+            zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3 \
+            file tar zstd binutils
 
       - name: Download ImmortalWrt 24.10 Filogic SDK
         run: |
-          SDK_URL="https://downloads.immortalwrt.org/releases/24.10.2/targets/mediatek/filogic/immortalwrt-sdk-24.10.2-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
-          echo "Downloading SDK from $SDK_URL..."
-          wget -q -O sdk.tar.zst "$SDK_URL"
-          mkdir sdk
-          tar --zstd -xf sdk.tar.zst -C sdk --strip-components=1
-          rm sdk.tar.zst
+          wget -q --show-progress https://downloads.immortalwrt.org/releases/24.10.2/targets/mediatek/filogic/immortalwrt-sdk-24.10.2-mediatek-filogic_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+          tar --zstd -xf immortalwrt-sdk-*.tar.zst
+          mv immortalwrt-sdk-* sdk
+          rm -f *.tar.zst
 
       - name: Prepare Linux 6.6.95 WireGuard source
         run: |
-          echo "Cloning WireGuard source from Linux 6.6.95..."
-          git clone --depth 1 --filter=blob:none --sparse --branch v6.6.95 https://github.com/gregkh/linux.git /tmp/linux-wg || \
-          git clone --depth 1 --filter=blob:none --sparse --branch v6.6 https://github.com/torvalds/linux.git /tmp/linux-wg
+          git clone --depth 1 --branch linux-6.6.y https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git /tmp/linux-wg
           cd /tmp/linux-wg
-          git sparse-checkout set drivers/net/wireguard include/uapi/linux
           mkdir -p /tmp/wireguard-src /tmp/wireguard-uapi
-          cp -r drivers/net/wireguard/* /tmp/wireguard-src/
+          cp drivers/net/wireguard/*.[ch] /tmp/wireguard-src/
           cp include/uapi/linux/wireguard.h /tmp/wireguard-uapi/
           ls -la /tmp/wireguard-src/
 
@@ -64,49 +61,56 @@ jobs:
             find "$LINUX_DIR" -name "kernel.release" -exec sed -i 's/6\.6\.[0-9]\+/6.6.95/g' {} +
             echo "e4a482954d3a4492189ab1b470ab3d29" > "$LINUX_DIR/.vermagic"
 
-            # Align struct module in autoconf.h with Cudy TR3000 running kernel
-            AUTOCONF="$LINUX_DIR/include/generated/autoconf.h"
-            if [ -f "$AUTOCONF" ]; then
-              echo "Patching autoconf.h for Cudy TR3000 struct module layout..."
-              for opt in \
-                CONFIG_MODULES_TREE_LOOKUP \
-                CONFIG_DEBUG_INFO_BTF_MODULES \
-                CONFIG_DEBUG_INFO_BTF \
-                CONFIG_TRACEPOINTS \
-                CONFIG_BPF_EVENTS \
-                CONFIG_TRACING \
-                CONFIG_EVENT_TRACING \
-                CONFIG_FTRACE_MCOUNT_RECORD \
-                CONFIG_LIVEPATCH \
-                CONFIG_CONSTRUCTORS \
-                CONFIG_FUNCTION_ERROR_INJECTION \
-                CONFIG_DYNAMIC_DEBUG_CORE \
-                CONFIG_DYNAMIC_DEBUG \
-                CONFIG_STACKTRACE_BUILD_ID \
-                CONFIG_ARCH_USES_CFI_TRAPS \
-                CONFIG_MODULE_SIG \
-                CONFIG_KPROBES \
-                CONFIG_HAVE_STATIC_CALL_INLINE \
-                CONFIG_KUNIT \
-                CONFIG_PRINTK_INDEX \
-              ; do
-                sed -i "/#define ${opt}\b/d" "$AUTOCONF"
-              done
+            # Align struct module in include/linux/module.h directly for Cudy TR3000
+            # Leaving autoconf.h untouched avoids breaking dependent kernel headers like kprobes.h
+            MODULE_H="$LINUX_DIR/include/linux/module.h"
+            if [ -f "$MODULE_H" ]; then
+              echo "Patching $MODULE_H for Cudy TR3000 struct module layout..."
+              export TARGET_MODULE_H="$MODULE_H"
+              python3 - << 'PYEOF'
+import os, sys
 
-              for opt in \
-                CONFIG_SYSFS \
-                CONFIG_MODULE_UNLOAD \
-                CONFIG_GENERIC_BUG \
-                CONFIG_KALLSYMS \
-                CONFIG_SMP \
-                CONFIG_TREE_SRCU \
-                CONFIG_JUMP_LABEL \
-              ; do
-                grep -q "#define ${opt}\b" "$AUTOCONF" || echo "#define ${opt} 1" >> "$AUTOCONF"
-              done
+module_h = os.environ.get("TARGET_MODULE_H")
+with open(module_h, "r") as f:
+    content = f.read()
 
-              echo "Sample lines from patched autoconf.h:"
-              grep -E "CONFIG_(DEBUG_INFO|KALLSYMS|MODULE|TREE_SRCU|JUMP)" "$AUTOCONF" | head -n 15
+undefs = """
+/* Begin Cudy TR3000 struct module alignment */
+#undef CONFIG_MODULES_TREE_LOOKUP
+#undef CONFIG_STACKTRACE_BUILD_ID
+#undef CONFIG_ARCH_USES_CFI_TRAPS
+#undef CONFIG_MODULE_SIG
+#undef CONFIG_TRACEPOINTS
+#undef CONFIG_BPF_EVENTS
+#undef CONFIG_DEBUG_INFO_BTF_MODULES
+#undef CONFIG_TRACING
+#undef CONFIG_EVENT_TRACING
+#undef CONFIG_FTRACE_MCOUNT_RECORD
+#undef CONFIG_KPROBES
+#undef CONFIG_HAVE_STATIC_CALL_INLINE
+#undef CONFIG_KUNIT
+#undef CONFIG_LIVEPATCH
+#undef CONFIG_PRINTK_INDEX
+#undef CONFIG_CONSTRUCTORS
+#undef CONFIG_FUNCTION_ERROR_INJECTION
+#undef CONFIG_DYNAMIC_DEBUG_CORE
+/* End Cudy TR3000 struct module alignment */
+"""
+
+target = "struct module_memory {"
+if target in content:
+    content = content.replace(target, undefs + "\n" + target, 1)
+    print("Inserted undefs before struct module_memory")
+else:
+    print("ERROR: struct module_memory not found in module.h!")
+    sys.exit(1)
+
+content = content.replace("#if IS_ENABLED(CONFIG_KUNIT)", "#if 0 /* IS_ENABLED(CONFIG_KUNIT) */")
+
+with open(module_h, "w") as f:
+    f.write(content)
+print("module.h patched successfully.")
+PYEOF
             fi
           fi
 
@@ -217,15 +221,15 @@ jobs:
           files: /tmp/release-pkgs/*.ipk
           overwrite: true
           body: |
-            AmneziaWG IPK packages for Cudy TR3000 (ImmortalWrt 24.10-SNAPSHOT, mediatek/filogic, aarch64_cortex-a53).
-            Kernel: 6.6.95~e4a482954d3a4492189ab1b470ab3d29-r1 (struct module aligned with running kernel).
+            Пакеты AmneziaWG (.ipk) для Cudy TR3000 под ImmortalWrt 24.10-SNAPSHOT (mediatek/filogic, aarch64_cortex-a53).
+            Ядро: 6.6.95~e4a482954d3a4492189ab1b470ab3d29-r1 (размер struct module выровнен под ядро Cudy TR3000).
 
-            Пакеты:
+            Файлы:
             - `kmod-amneziawg_6.6.95.0.0.1-r1_aarch64_cortex-a53.ipk`
             - `amneziawg-tools_1.0.20240213-r1_aarch64_cortex-a53.ipk`
             - `luci-proto-amneziawg_0.0.1-1_all.ipk`
 
-            ### Установка на Cudy TR3000:
+            ### Установка на роутер Cudy TR3000:
             1. Загрузите файлы на роутер в `/tmp`:
                ```bash
                scp *.ipk root@192.168.1.1:/tmp/
