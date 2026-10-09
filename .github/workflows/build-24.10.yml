@@ -63,8 +63,32 @@ jobs:
 
             # Apply exact router running kernel config
             if [ -f "$GITHUB_WORKSPACE/cudy-kernel.config" ]; then
-              echo "Applying exact Cudy running kernel config to $LINUX_DIR/.config..."
+              echo "Applying exact Cudy running kernel config..."
               cp "$GITHUB_WORKSPACE/cudy-kernel.config" "$LINUX_DIR/.config"
+              mkdir -p "$LINUX_DIR/include/config"
+              cp "$GITHUB_WORKSPACE/cudy-kernel.config" "$LINUX_DIR/include/config/auto.conf"
+
+              echo "Generating include/generated/autoconf.h from exact router config..."
+              mkdir -p "$LINUX_DIR/include/generated"
+              perl -e '
+                open(my $in, "<", "'"$GITHUB_WORKSPACE"'/cudy-kernel.config") or die "cannot open config: $!";
+                open(my $out, ">", "'"$LINUX_DIR"'/include/generated/autoconf.h") or die "cannot write autoconf: $!";
+                print $out "/* Automatically generated file; DO NOT EDIT. */\n";
+                while (<$in>) {
+                  chomp;
+                  if (/^CONFIG_([^=]+)=y$/) {
+                    print $out "#define CONFIG_$1 1\n";
+                  } elsif (/^CONFIG_([^=]+)=m$/) {
+                    print $out "#define CONFIG_$1_MODULE 1\n";
+                  } elsif (/^CONFIG_([^=]+)=(".*"|\d+|0x[0-9a-fA-F]+)$/) {
+                    print $out "#define CONFIG_$1 $2\n";
+                  }
+                }
+                close($in);
+                close($out);
+              '
+              echo "autoconf.h generated. Sample lines:"
+              grep -E "CONFIG_(DEBUG_INFO|KALLSYMS|MODULE|TREE_SRCU)" "$LINUX_DIR/include/generated/autoconf.h" | head -n 10
             fi
 
             if [ -f "$LINUX_DIR/Makefile" ]; then
@@ -73,16 +97,6 @@ jobs:
             find "$LINUX_DIR" -name "utsrelease.h" -exec sed -i 's/"6\.6\.[0-9]\+"/"6.6.95"/g' {} +
             find "$LINUX_DIR" -name "kernel.release" -exec sed -i 's/6\.6\.[0-9]\+/6.6.95/g' {} +
             echo "e4a482954d3a4492189ab1b470ab3d29" > "$LINUX_DIR/.vermagic"
-
-            # Re-generate autoconf.h matching the router's config
-            TOOLCHAIN_BIN=$(find staging_dir/ -type d -name "toolchain-*_musl")/bin
-            if [ -d "$TOOLCHAIN_BIN" ]; then
-              export PATH="$TOOLCHAIN_BIN:$PATH"
-              CROSS="aarch64-openwrt-linux-musl-"
-              echo "Running olddefconfig and modules_prepare with $CROSS..."
-              make -C "$LINUX_DIR" ARCH=arm64 CROSS_COMPILE="$CROSS" olddefconfig
-              make -C "$LINUX_DIR" ARCH=arm64 CROSS_COMPILE="$CROSS" modules_prepare || true
-            fi
           fi
 
           if [ -f include/kernel-6.6 ]; then
