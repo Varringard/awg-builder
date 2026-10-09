@@ -70,6 +70,15 @@ jobs:
             if [ -f "$MODULE_H" ]; then
               echo "Patching $MODULE_H for Cudy TR3000 struct module layout..."
               python3 "$GITHUB_WORKSPACE/scripts/patch_module_h.py" "$MODULE_H"
+              AUTOCONF="$LINUX_DIR/include/generated/autoconf.h"
+              if [ -f "$AUTOCONF" ]; then
+                echo "Removing TRACEPOINTS and debug options from autoconf.h..."
+                sed -i '/#define CONFIG_TRACEPOINTS\b/d' "$AUTOCONF"
+                sed -i '/#define CONFIG_DEBUG_LIST\b/d' "$AUTOCONF"
+                sed -i '/#define CONFIG_DEBUG_SG\b/d' "$AUTOCONF"
+                sed -i '/#define CONFIG_DEBUG_NOTIFIERS\b/d' "$AUTOCONF"
+                sed -i '/#define CONFIG_DEBUG_PLIST\b/d' "$AUTOCONF"
+              fi
             fi
           fi
 
@@ -125,7 +134,9 @@ jobs:
             if [ -n "$KO" ]; then
               echo "Inspecting $KO:"
               strings "$KO" | grep "vermagic=" || true
-              readelf -S "$KO" | grep -E "this_module|\.text" || true
+              readelf --wide -S "$KO" | grep -E "this_module|\.text" || true
+              echo "Checking for remaining trace/debug undefined symbols in $KO:"
+              readelf --wide -s "$KO" | grep -E "consume_skb|do_trace|list_add|list_del" || echo "All clear: no missing trace or debug symbols!"
             fi
             rm -rf "$WORKDIR"
           done
