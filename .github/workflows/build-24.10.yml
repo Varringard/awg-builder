@@ -62,55 +62,11 @@ jobs:
             echo "e4a482954d3a4492189ab1b470ab3d29" > "$LINUX_DIR/.vermagic"
 
             # Align struct module in include/linux/module.h directly for Cudy TR3000
-            # Leaving autoconf.h untouched avoids breaking dependent kernel headers like kprobes.h
+            # Leaving autoconf.h untouched preserves consistency of internal headers like kprobes.h
             MODULE_H="$LINUX_DIR/include/linux/module.h"
             if [ -f "$MODULE_H" ]; then
               echo "Patching $MODULE_H for Cudy TR3000 struct module layout..."
-              export TARGET_MODULE_H="$MODULE_H"
-              python3 - << 'PYEOF'
-import os, sys
-
-module_h = os.environ.get("TARGET_MODULE_H")
-with open(module_h, "r") as f:
-    content = f.read()
-
-undefs = """
-/* Begin Cudy TR3000 struct module alignment */
-#undef CONFIG_MODULES_TREE_LOOKUP
-#undef CONFIG_STACKTRACE_BUILD_ID
-#undef CONFIG_ARCH_USES_CFI_TRAPS
-#undef CONFIG_MODULE_SIG
-#undef CONFIG_TRACEPOINTS
-#undef CONFIG_BPF_EVENTS
-#undef CONFIG_DEBUG_INFO_BTF_MODULES
-#undef CONFIG_TRACING
-#undef CONFIG_EVENT_TRACING
-#undef CONFIG_FTRACE_MCOUNT_RECORD
-#undef CONFIG_KPROBES
-#undef CONFIG_HAVE_STATIC_CALL_INLINE
-#undef CONFIG_KUNIT
-#undef CONFIG_LIVEPATCH
-#undef CONFIG_PRINTK_INDEX
-#undef CONFIG_CONSTRUCTORS
-#undef CONFIG_FUNCTION_ERROR_INJECTION
-#undef CONFIG_DYNAMIC_DEBUG_CORE
-/* End Cudy TR3000 struct module alignment */
-"""
-
-target = "struct module_memory {"
-if target in content:
-    content = content.replace(target, undefs + "\n" + target, 1)
-    print("Inserted undefs before struct module_memory")
-else:
-    print("ERROR: struct module_memory not found in module.h!")
-    sys.exit(1)
-
-content = content.replace("#if IS_ENABLED(CONFIG_KUNIT)", "#if 0 /* IS_ENABLED(CONFIG_KUNIT) */")
-
-with open(module_h, "w") as f:
-    f.write(content)
-print("module.h patched successfully.")
-PYEOF
+              python3 "$GITHUB_WORKSPACE/scripts/patch_module_h.py" "$MODULE_H"
             fi
           fi
 
@@ -185,17 +141,7 @@ PYEOF
             cp -r "$LUCI_DIR/htdocs/"* "$WORKDIR/data/www/" || true
             cp -r "$LUCI_DIR/root/usr/"* "$WORKDIR/data/usr/" || true
 
-            cat << 'EOF' > "$WORKDIR/control/control"
-          Package: luci-proto-amneziawg
-          Version: 0.0.1-1
-          Depends: luci-base, amneziawg-tools, ucode
-          Architecture: all
-          Maintainer: Amnezia Admin <admin@amnezia.org>
-          Section: luci
-          Source: feeds/amneziawg/luci-proto-amneziawg
-          Description: Provides Web UI for AmneziaWG
-          EOF
-            sed -i 's/^[[:space:]]\+//' "$WORKDIR/control/control"
+            printf "Package: luci-proto-amneziawg\nVersion: 0.0.1-1\nDepends: luci-base, amneziawg-tools, ucode\nArchitecture: all\nMaintainer: Amnezia Admin <admin@amnezia.org>\nSection: luci\nSource: feeds/amneziawg/luci-proto-amneziawg\nDescription: Provides Web UI for AmneziaWG\n" > "$WORKDIR/control/control"
 
             (cd "$WORKDIR/data" && tar --format=gnu --numeric-owner --sort=name -czf "$WORKDIR/data.tar.gz" .)
             (cd "$WORKDIR/control" && tar --format=gnu --numeric-owner --sort=name -czf "$WORKDIR/control.tar.gz" .)
